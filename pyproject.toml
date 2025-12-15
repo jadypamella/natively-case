@@ -1,0 +1,13 @@
+[project]
+name = "sill-ai"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "claude-agent-sdk>=0.1.16",
+    "fastapi>=0.120.4",
+    "modal>=1.2.1",
+    "uvicorn>=0.38.0",
+    "websockets>=15.0.1",
+]
