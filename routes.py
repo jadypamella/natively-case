@@ -31,19 +31,30 @@ async def chat(request: ChatRequest) -> ChatResponse:
     is_new_session = not sessions.contains(session_id)
     print(f"[API] New session: {is_new_session}")
     
-    # Check if session is already running to prevent duplicate spawns
+    # Check if session exists and is running - return it so frontend can use WebSocket
     if not is_new_session:
         existing_session = sessions[session_id]
-        if existing_session.get("status") in ["initializing", "running"]:
-            print(f"[API] Session {session_id} already running, returning existing session")
-            return ChatResponse(
-                session_id=session_id,
-                message="Session already running",
-                status=existing_session["status"],
-                sandbox_id=existing_session.get("sandbox_id"),
-                websocket_url=ws_urls.get(session_id) or existing_session.get("websocket_url"),
-                dev_url=existing_session.get("dev_url")
-            )
+        print(f"[API] Existing session {session_id} found (status: {existing_session.get('status')})")
+        
+        # Add message to session history for tracking
+        existing_session["messages"].append({
+            "role": "user",
+            "content": request.message,
+            "timestamp": datetime.utcnow().isoformat()
+        })
+        existing_session["last_activity"] = datetime.utcnow().isoformat()
+        sessions[session_id] = existing_session
+        
+        print(f"[API] Message added to session history. Frontend should send via WebSocket.")
+        
+        return ChatResponse(
+            session_id=session_id,
+            message="Send this message via WebSocket to the running sandbox",
+            status=existing_session["status"],
+            sandbox_id=existing_session.get("sandbox_id"),
+            websocket_url=ws_urls.get(session_id) or existing_session.get("websocket_url"),
+            dev_url=existing_session.get("dev_url")
+        )
     
     if is_new_session:
         print(f"[API] Creating new session {session_id}")

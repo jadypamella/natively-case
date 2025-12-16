@@ -5,6 +5,7 @@ import { useRouter, useParams } from "next/navigation";
 import ChatMessage from "../../components/ChatMessage";
 import ChatInput from "../../components/ChatInput";
 import WebsitePreview from "../../components/WebsitePreview";
+import ThinkingIndicator from "../../components/ThinkingIndicator";
 import { Message } from "../../types";
 import { apiClient } from "../../lib/api-client";
 import { useAgentSession } from "../../hooks/useAgentSession";
@@ -22,8 +23,10 @@ export default function ChatPage() {
   
   const [messages, setMessages] = useState<Message[]>([]);
   const [isLoading, setIsLoading] = useState(false);
+  const [isThinking, setIsThinking] = useState(false);
   const [agentSessionId, setAgentSessionId] = useState<string | null>(null);
   const [devUrl, setDevUrl] = useState<string | null>(null);
+  const [iframeRefreshTrigger, setIframeRefreshTrigger] = useState(0);
   const [isSidebarOpen, setIsSidebarOpen] = useState(true);
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
@@ -51,6 +54,7 @@ export default function ChatPage() {
       const text = latestEvent.data?.text;
       if (text) {
         console.log('[Chat] Got text:', text.substring(0, 50));
+        // Don't hide thinking yet - Claude might be thinking/using tools after text
         setMessages((prev) => {
           const streamingMsgId = "streaming-response";
           const existingIndex = prev.findIndex((m) => m.id === streamingMsgId);
@@ -63,8 +67,13 @@ export default function ChatPage() {
             };
             return updated;
           } else {
+            // Remove placeholder "Building..." messages when real content arrives
+            const filtered = prev.filter(m => 
+              !m.content.includes("Building your website") && 
+              !m.content.includes("Processing your request")
+            );
             return [
-              ...prev,
+              ...filtered,
               {
                 id: streamingMsgId,
                 role: "assistant",
@@ -74,7 +83,21 @@ export default function ChatPage() {
             ];
           }
         });
+        // Show thinking after text (Claude might be thinking about next steps)
+        setIsThinking(true);
       }
+    }
+    
+    // Handle Claude thinking events
+    if (latestEvent.event === "claude_thinking") {
+      console.log('[Chat] Claude is thinking');
+      setIsThinking(true);
+    }
+    
+    // Handle Claude tool use events
+    if (latestEvent.event === "claude_tool_use") {
+      console.log('[Chat] Claude is using a tool:', latestEvent.data?.tool);
+      setIsThinking(true);
     }
     
     // Handle Claude events (contains text in nested structure)
@@ -101,8 +124,13 @@ export default function ChatPage() {
                 };
                 return updated;
               } else {
+                // Remove placeholder messages when real content arrives
+                const filtered = prev.filter(m => 
+                  !m.content.includes("Building your website") && 
+                  !m.content.includes("Processing your request")
+                );
                 return [
-                  ...prev,
+                  ...filtered,
                   {
                     id: streamingMsgId,
                     role: "assistant",
@@ -135,6 +163,50 @@ export default function ChatPage() {
           const exists = prev.some((m) => m.content.includes("website is ready"));
           return exists ? prev : [...prev, msg];
         });
+        
+        // Initial load of iframe
+        console.log('[Chat] Initial iframe load');
+        setIframeRefreshTrigger(prev => prev + 1);
+      }
+    }
+    
+    // Handle turn complete - finalize streaming message for this turn
+    if (latestEvent.event === "turn_complete") {
+      console.log('[Chat] Turn completed');
+      setIsThinking(false);
+      
+      // Finalize streaming message for this turn
+      setMessages((prev) => {
+        const hasStreaming = prev.some(m => m.id === "streaming-response");
+        if (!hasStreaming) return prev;
+        
+        return prev.map((msg) => {
+          if (msg.id === "streaming-response") {
+            return {
+              ...msg,
+              id: `response-${Date.now()}`,
+            };
+          }
+          return msg;
+        });
+      });
+      
+      // Refresh iframe to show updated website
+      if (devUrl) {
+        console.log('[Chat] Refreshing iframe after turn complete');
+        setIframeRefreshTrigger(prev => prev + 1);
+      }
+    }
+    
+    // Handle ready for input
+    if (latestEvent.event === "ready_for_input") {
+      console.log('[Chat] Ready for input');
+      setIsThinking(false);
+      
+      // Also refresh iframe when ready for input
+      if (devUrl) {
+        console.log('[Chat] Refreshing iframe - ready for input');
+        setIframeRefreshTrigger(prev => prev + 1);
       }
     }
     
@@ -156,6 +228,7 @@ export default function ChatPage() {
       });
       
       setIsLoading(false);
+      setIsThinking(false);
     }
     
     // Handle errors
@@ -169,6 +242,7 @@ export default function ChatPage() {
       };
       setMessages((prev) => [...prev, errorMsg]);
       setIsLoading(false);
+      setIsThinking(false);
     }
   }, [agentSession.events, devUrl]);
 
@@ -196,26 +270,37 @@ export default function ChatPage() {
     setIsLoading(true);
 
     try {
-      // Call Modal API
-      const response = await apiClient.chat({
-        session_id: agentSessionId || undefined,
-        message: content.trim(),
-      });
+      // If we have an existing session and are connected via WebSocket, send via WS
+      if (agentSessionId && agentSession.isConnected && agentSession.sendPrompt) {
+        console.log('[Chat] Sending follow-up prompt via WebSocket');
+        const success = agentSession.sendPrompt(content.trim());
+        
+        if (!success) {
+          throw new Error('Failed to send prompt via WebSocket');
+        }
+      } else {
+        // First message or not connected - use API to create/get session
+        console.log('[Chat] Creating new session via API');
+        const response = await apiClient.chat({
+          session_id: agentSessionId || undefined,
+          message: content.trim(),
+        });
 
-      // Store session ID for subsequent messages
-      if (!agentSessionId) {
-        setAgentSessionId(response.session_id);
+        // Store session ID for subsequent messages
+        if (!agentSessionId) {
+          setAgentSessionId(response.session_id);
+        }
+
+        // Add building message
+        const assistantMessage: Message = {
+          id: (Date.now() + 1).toString(),
+          role: "assistant",
+          content: "🚀 Building your website now... This will take a moment.",
+          timestamp: new Date(),
+        };
+
+        setMessages((prev) => [...prev, assistantMessage]);
       }
-
-      // Add building message
-      const assistantMessage: Message = {
-        id: (Date.now() + 1).toString(),
-        role: "assistant",
-        content: "🚀 Building your website now... This will take a moment.",
-        timestamp: new Date(),
-      };
-
-      setMessages((prev) => [...prev, assistantMessage]);
       
     } catch (error) {
       console.error("Failed to send message:", error);
@@ -228,6 +313,7 @@ export default function ChatPage() {
       };
       
       setMessages((prev) => [...prev, errorMessage]);
+      setIsThinking(false);
     } finally {
       setIsLoading(false);
     }
@@ -327,7 +413,10 @@ export default function ChatPage() {
                   isStreaming={message.id === "streaming-response"}
                 />
               ))}
-              {isLoading && messages[messages.length - 1]?.role !== "assistant" && (
+              {isThinking && (
+                <ThinkingIndicator />
+              )}
+              {isLoading && messages[messages.length - 1]?.role !== "assistant" && !isThinking && (
                 <div className="mb-8 flex items-start gap-4 animate-in fade-in slide-in-from-bottom-4 duration-500">
                   <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-gradient-to-br from-blue-500 to-cyan-500 text-white shadow-md">
                     <Sparkles className="h-4 w-4" />
@@ -369,7 +458,7 @@ export default function ChatPage() {
           {/* Right Panel - Website Preview */}
           {devUrl && (
             <div className="w-1/2 flex flex-col">
-              <WebsitePreview devUrl={devUrl} />
+              <WebsitePreview devUrl={devUrl} refreshTrigger={iframeRefreshTrigger} />
             </div>
           )}
         </div>

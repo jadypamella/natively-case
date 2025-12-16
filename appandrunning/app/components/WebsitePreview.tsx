@@ -1,17 +1,26 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { Card } from "./ui/card";
 import { Button } from "./ui/button";
 import { RefreshCw, ExternalLink } from "lucide-react";
 
 interface WebsitePreviewProps {
   devUrl: string;
+  refreshTrigger?: number; // External trigger to refresh iframe
 }
 
-export default function WebsitePreview({ devUrl }: WebsitePreviewProps) {
+export default function WebsitePreview({ devUrl, refreshTrigger }: WebsitePreviewProps) {
   const [isExpanded, setIsExpanded] = useState(true);
   const [refreshKey, setRefreshKey] = useState(0);
+
+  // Refresh when external trigger changes
+  useEffect(() => {
+    if (refreshTrigger !== undefined && refreshTrigger > 0) {
+      console.log('[WebsitePreview] External refresh trigger received:', refreshTrigger);
+      setRefreshKey((prev) => prev + 1);
+    }
+  }, [refreshTrigger]);
 
   const handleRefresh = () => {
     setRefreshKey((prev) => prev + 1);
@@ -104,3 +113,4 @@ export default function WebsitePreview({ devUrl }: WebsitePreviewProps) {
     </Card>
   );
 }
+

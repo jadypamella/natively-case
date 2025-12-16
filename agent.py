@@ -33,8 +33,8 @@ def send_event_factory(session_id: str, event_queue: queue.Queue):
     return send_event
 
 
-def setup_websocket_server(session_id: str, event_queue: queue.Queue):
-    """Setup WebSocket server for real-time event streaming"""
+def setup_websocket_server(session_id: str, event_queue: queue.Queue, prompt_queue: queue.Queue):
+    """Setup WebSocket server for real-time event streaming and receiving prompts"""
     websocket_clients = []
     websocket_lock = threading.Lock()
     
@@ -46,7 +46,8 @@ def setup_websocket_server(session_id: str, event_queue: queue.Queue):
             "status": "healthy",
             "session_id": session_id,
             "connected_clients": len(websocket_clients),
-            "queued_events": event_queue.qsize()
+            "queued_events": event_queue.qsize(),
+            "queued_prompts": prompt_queue.qsize()
         }
     
     @ws_app.websocket("/ws")
@@ -67,6 +68,7 @@ def setup_websocket_server(session_id: str, event_queue: queue.Queue):
             })
             
             async def send_queued_events():
+                """Send events from the queue to the client"""
                 while True:
                     try:
                         event = event_queue.get_nowait()
@@ -78,13 +80,29 @@ def setup_websocket_server(session_id: str, event_queue: queue.Queue):
                         print(f"[Sandbox:{session_id}] Error sending event: {type(e).__name__}: {e}")
                         break
             
+            async def receive_prompts():
+                """Receive prompts from the client"""
+                while True:
+                    try:
+                        data = await websocket.receive_json()
+                        if data.get("type") == "prompt":
+                            prompt = data.get("message")
+                            if prompt:
+                                print(f"[Sandbox:{session_id}] Received new prompt via WebSocket: {prompt[:100]}...")
+                                prompt_queue.put(prompt)
+                    except Exception as e:
+                        print(f"[Sandbox:{session_id}] Error receiving prompt: {type(e).__name__}: {e}")
+                        break
+            
             send_task = asyncio.create_task(send_queued_events())
+            receive_task = asyncio.create_task(receive_prompts())
             
             try:
-                while True:
-                    await websocket.receive_text()
+                # Wait for either task to complete (usually on disconnect)
+                await asyncio.gather(send_task, receive_task)
             finally:
                 send_task.cancel()
+                receive_task.cancel()
                 
         except WebSocketDisconnect:
             print(f"[Sandbox:{session_id}] WebSocket client {client_id} disconnected (remaining clients: {len(websocket_clients) - 1})")
@@ -171,8 +189,8 @@ def verify_workspace_files(session_id: str, workspace: str):
         print(f"[Sandbox:{session_id}] Could not set workspace permissions: {e}")
 
 
-async def run_claude_agent(session_id: str, prompt: str, workspace: str, send_event):
-    """Run the Claude Agent SDK and process messages"""
+async def run_claude_agent_multiturn(session_id: str, initial_prompt: str, workspace: str, send_event, prompt_queue: queue.Queue, dev_tunnel_url: str, ws_tunnel_url: str):
+    """Run the Claude Agent SDK with support for multiple prompts"""
     from claude_agent_sdk import (
         ClaudeSDKClient, ClaudeAgentOptions, AssistantMessage, TextBlock,
         ThinkingBlock, ToolUseBlock, ToolResultBlock, ResultMessage
@@ -186,20 +204,6 @@ async def run_claude_agent(session_id: str, prompt: str, workspace: str, send_ev
     
     print(f"[Sandbox:{session_id}] ANTHROPIC_API_KEY found")
     
-    # Create a simple prompt for building websites
-    full_prompt = f"""Build a {prompt}.
-
-Create a single index.html file with:
-- Embedded CSS in a <style> tag
-- Embedded JavaScript if needed in a <script> tag
-- Modern, beautiful design
-- Responsive layout
-- Clean, professional look
-
-The file must be saved as index.html in the current directory."""
-    
-    print(f"[Sandbox:{session_id}] Initializing Claude Agent SDK client...")
-    
     # Configure Claude Agent SDK options
     sdk_options = ClaudeAgentOptions(
         allowed_tools=["Read", "Write", "Edit", "Bash", "Glob", "Grep"],
@@ -208,100 +212,191 @@ The file must be saved as index.html in the current directory."""
         env={"ANTHROPIC_API_KEY": anthropic_api_key}
     )
     
-    event_count = 0
-    claude_session_id = None
-    exit_code = 0
+    total_event_count = 0
+    turn_count = 0
+    dev_server = None
     
     print(f"[Sandbox:{session_id}] Connecting to Claude Agent SDK...")
     async with ClaudeSDKClient(options=sdk_options) as client:
-        print(f"[Sandbox:{session_id}] Sending prompt to Claude...")
-        await client.query(full_prompt)
         
-        print(f"[Sandbox:{session_id}] Streaming Claude SDK messages...")
-        async for message in client.receive_messages():
-            event_count += 1
+        async def process_prompt(prompt: str, turn_number: int):
+            """Process a single prompt and stream responses"""
+            nonlocal total_event_count
             
-            # Handle different message types
-            if isinstance(message, AssistantMessage):
-                for block in message.content:
-                    if isinstance(block, TextBlock):
-                        send_event("claude_text", {
-                            "text": block.text,
-                            "event_number": event_count
-                        })
-                        print(f"[Sandbox:{session_id}] Text: {block.text[:100]}...")
-                    
-                    elif isinstance(block, ThinkingBlock):
-                        send_event("claude_thinking", {
-                            "thinking": block.thinking,
-                            "event_number": event_count
-                        })
-                    
-                    elif isinstance(block, ToolUseBlock):
-                        send_event("claude_tool_use", {
-                            "tool": block.name,
-                            "input": block.input,
-                            "tool_use_id": block.id,
-                            "event_number": event_count
-                        })
-                        print(f"[Sandbox:{session_id}] Tool use: {block.name}")
-                    
-                    elif isinstance(block, ToolResultBlock):
-                        result_text = ""
-                        if isinstance(block.content, str):
-                            result_text = block.content
-                        elif isinstance(block.content, list):
-                            result_text = str(block.content)
+            # Create a simple prompt for building websites
+            full_prompt = f"""Build a {prompt}.
+
+Create a single index.html file with:
+- Embedded CSS in a <style> tag
+- Embedded JavaScript if needed in a <script> tag
+- Modern, beautiful design
+- Responsive layout
+- Clean, professional look
+
+The file must be saved as index.html in the current directory.""" if turn_number == 1 else prompt
+            
+            print(f"[Sandbox:{session_id}] Turn {turn_number}: Sending prompt to Claude...")
+            send_event("turn_start", {"turn": turn_number, "prompt": prompt[:100]})
+            
+            await client.query(full_prompt)
+            
+            print(f"[Sandbox:{session_id}] Turn {turn_number}: Streaming Claude SDK messages...")
+            event_count = 0
+            claude_session_id = None
+            
+            async for message in client.receive_messages():
+                event_count += 1
+                total_event_count += 1
+                
+                # Handle different message types
+                if isinstance(message, AssistantMessage):
+                    for block in message.content:
+                        if isinstance(block, TextBlock):
+                            send_event("claude_text", {
+                                "text": block.text,
+                                "turn": turn_number,
+                                "event_number": total_event_count
+                            })
+                            print(f"[Sandbox:{session_id}] Turn {turn_number} Text: {block.text[:100]}...")
                         
-                        send_event("claude_tool_result", {
-                            "tool_use_id": block.tool_use_id,
-                            "result": result_text,
-                            "is_error": block.is_error or False,
-                            "event_number": event_count
-                        })
-                        print(f"[Sandbox:{session_id}] Tool result for {block.tool_use_id}")
+                        elif isinstance(block, ThinkingBlock):
+                            send_event("claude_thinking", {
+                                "thinking": block.thinking,
+                                "turn": turn_number,
+                                "event_number": total_event_count
+                            })
+                        
+                        elif isinstance(block, ToolUseBlock):
+                            send_event("claude_tool_use", {
+                                "tool": block.name,
+                                "input": block.input,
+                                "tool_use_id": block.id,
+                                "turn": turn_number,
+                                "event_number": total_event_count
+                            })
+                            print(f"[Sandbox:{session_id}] Turn {turn_number} Tool use: {block.name}")
+                        
+                        elif isinstance(block, ToolResultBlock):
+                            result_text = ""
+                            if isinstance(block.content, str):
+                                result_text = block.content
+                            elif isinstance(block.content, list):
+                                result_text = str(block.content)
+                            
+                            send_event("claude_tool_result", {
+                                "tool_use_id": block.tool_use_id,
+                                "result": result_text,
+                                "is_error": block.is_error or False,
+                                "turn": turn_number,
+                                "event_number": total_event_count
+                            })
+                            print(f"[Sandbox:{session_id}] Turn {turn_number} Tool result for {block.tool_use_id}")
+                
+                elif isinstance(message, ResultMessage):
+                    claude_session_id = message.session_id
+                    exit_code = 1 if message.is_error else 0
+                    
+                    send_event("turn_complete", {
+                        "turn": turn_number,
+                        "session_id": claude_session_id,
+                        "duration_ms": message.duration_ms,
+                        "num_turns": message.num_turns,
+                        "total_cost_usd": message.total_cost_usd,
+                        "is_error": message.is_error,
+                        "event_number": total_event_count
+                    })
+                    
+                    print(f"[Sandbox:{session_id}] Turn {turn_number} completed: {claude_session_id} (SDK turns: {message.num_turns}, cost: ${message.total_cost_usd})")
+                    return exit_code
+                
+                if event_count % 50 == 0:
+                    print(f"[Sandbox:{session_id}] Turn {turn_number}: Processed {event_count} SDK messages...")
             
-            elif isinstance(message, ResultMessage):
-                claude_session_id = message.session_id
-                exit_code = 1 if message.is_error else 0
+            return 0
+        
+        # Process initial prompt
+        turn_count += 1
+        await process_prompt(initial_prompt, turn_count)
+        send_event("first_turn_complete", {"turn": turn_count})
+        
+        # Verify files and fix permissions
+        verify_workspace_files(session_id, workspace)
+        
+        # Start development server now that files have been created
+        print(f"[Sandbox:{session_id}] Starting dev server at {dev_tunnel_url}...")
+        send_event("dev_server_starting", {})
+        
+        dev_server = DevServerManager(
+            session_id=session_id,
+            work_dir=workspace,
+            dev_tunnel_url=dev_tunnel_url,
+            ws_tunnel_url=ws_tunnel_url,
+            send_event=send_event
+        )
+        dev_server.process = dev_server.start()
+        
+        if dev_server.process:
+            send_event("dev_server_started", {
+                "tunnel_url": dev_tunnel_url,
+                "websocket_url": ws_tunnel_url
+            })
+            print(f"[Sandbox:{session_id}] Dev server started at {dev_tunnel_url}")
+            dev_server.start_monitor()
+        else:
+            send_event("dev_server_failed", {"error": "Failed to start server"})
+            print(f"[Sandbox:{session_id}] WARNING: Dev server failed to start")
+        
+        send_event("ready_for_input", {"turn": turn_count})
+        
+        # Listen for additional prompts
+        print(f"[Sandbox:{session_id}] Ready for additional prompts (WebSocket is open for new messages)...")
+        while True:
+            try:
+                # Check for new prompts every 0.5 seconds
+                new_prompt = None
+                try:
+                    new_prompt = prompt_queue.get(timeout=0.5)
+                except queue.Empty:
+                    continue
                 
-                send_event("claude_session_end", {
-                    "session_id": claude_session_id,
-                    "duration_ms": message.duration_ms,
-                    "num_turns": message.num_turns,
-                    "total_cost_usd": message.total_cost_usd,
-                    "is_error": message.is_error,
-                    "event_number": event_count
-                })
-                
-                print(f"[Sandbox:{session_id}] Session ended: {claude_session_id} (turns: {message.num_turns}, cost: ${message.total_cost_usd})")
+                if new_prompt:
+                    turn_count += 1
+                    print(f"[Sandbox:{session_id}] Processing turn {turn_count}")
+                    await process_prompt(new_prompt, turn_count)
+                    send_event("ready_for_input", {"turn": turn_count})
+                    
+            except asyncio.CancelledError:
+                print(f"[Sandbox:{session_id}] Agent loop cancelled")
                 break
-            
-            if event_count % 50 == 0:
-                print(f"[Sandbox:{session_id}] Processed {event_count} SDK messages...")
+            except Exception as e:
+                print(f"[Sandbox:{session_id}] Error in agent loop: {type(e).__name__}: {e}")
+                import traceback
+                traceback.print_exc()
+                break
     
-    print(f"[Sandbox:{session_id}] Claude SDK completed ({event_count} messages processed)")
+    print(f"[Sandbox:{session_id}] Claude SDK completed ({total_event_count} total messages, {turn_count} turns)")
     
     return {
-        "event_count": event_count,
-        "claude_session_id": claude_session_id,
-        "exit_code": exit_code
+        "event_count": total_event_count,
+        "turn_count": turn_count,
+        "exit_code": 0
     }
 
 
 @app.function(
     image=agent_image,
     secrets=[modal.Secret.from_name("anthropic-secret")],
-    timeout=3600
+    timeout=7200  # 2 hours to support long conversations
 )
 async def run_agent_in_sandbox(session_id: str, prompt: str):
-    """Main function to run Claude Agent in Modal sandbox with WebSocket streaming"""
+    """Main function to run Claude Agent in Modal sandbox with WebSocket streaming and multi-turn support"""
     
     print(f"[Sandbox:{session_id}] Starting agent in sandbox")
-    print(f"[Sandbox:{session_id}] Prompt: {prompt[:100]}..." if len(prompt) > 100 else f"[Sandbox:{session_id}] Prompt: {prompt}")
+    print(f"[Sandbox:{session_id}] Initial prompt: {prompt[:100]}..." if len(prompt) > 100 else f"[Sandbox:{session_id}] Initial prompt: {prompt}")
     
-    # Setup event queue and send_event function
+    # Setup event queue, prompt queue, and send_event function
     event_queue = queue.Queue()
+    prompt_queue = queue.Queue()
     send_event = send_event_factory(session_id, event_queue)
     
     # Setup workspace
@@ -316,7 +411,7 @@ async def run_agent_in_sandbox(session_id: str, prompt: str):
     }
     
     # Start WebSocket server
-    run_websocket_server = setup_websocket_server(session_id, event_queue)
+    run_websocket_server = setup_websocket_server(session_id, event_queue, prompt_queue)
     ws_thread = threading.Thread(target=run_websocket_server, daemon=True)
     ws_thread.start()
     time.sleep(2)
@@ -362,12 +457,33 @@ async def run_agent_in_sandbox(session_id: str, prompt: str):
             results["events"].append(event_data)
             send_event("coding_start", {"prompt": prompt, "work_dir": workspace})
             
-            # Run Claude Agent
+            # Update session status to running
+            if sessions.contains(session_id):
+                session_data = sessions[session_id]
+                session_data["status"] = "running"
+                session_data["last_activity"] = datetime.utcnow().isoformat()
+                session_data["dev_url"] = dev_tunnel_url
+                session_data["websocket_url"] = ws_tunnel_url
+                sessions[session_id] = session_data
+                print(f"[Sandbox:{session_id}] Updated session status to running")
+            
+            # Run Claude Agent with multi-turn support (this runs indefinitely)
+            # Dev server will be started after first turn completes
             try:
-                agent_results = await run_claude_agent(session_id, prompt, workspace, send_event)
+                agent_results = await run_claude_agent_multiturn(
+                    session_id=session_id,
+                    initial_prompt=prompt,
+                    workspace=workspace,
+                    send_event=send_event,
+                    prompt_queue=prompt_queue,
+                    dev_tunnel_url=dev_tunnel_url,
+                    ws_tunnel_url=ws_tunnel_url
+                )
                 event_count = agent_results["event_count"]
-                claude_session_id = agent_results["claude_session_id"]
+                turn_count = agent_results["turn_count"]
                 exit_code = agent_results["exit_code"]
+                
+                print(f"[Sandbox:{session_id}] Agent completed all turns successfully")
                 
             except Exception as sdk_error:
                 print(f"[Sandbox:{session_id}] Claude SDK error: {type(sdk_error).__name__}: {sdk_error}")
@@ -375,78 +491,34 @@ async def run_agent_in_sandbox(session_id: str, prompt: str):
                 traceback.print_exc()
                 exit_code = 1
                 event_count = 0
-                claude_session_id = None
+                turn_count = 0
             
+            # This code will only execute if the agent loop ends
             event_data = {
-                "type": "agent_coding_stopped",
+                "type": "agent_session_ended",
                 "timestamp": datetime.utcnow().isoformat(),
-                "exit_code": exit_code
+                "exit_code": exit_code,
+                "turn_count": turn_count
             }
             results["events"].append(event_data)
-            send_event("coding_end", {"exit_code": exit_code})
+            send_event("session_end", {"exit_code": exit_code, "turn_count": turn_count})
             
             results["event_count"] = event_count
+            results["turn_count"] = turn_count
             results["exit_code"] = exit_code
-            
-            if claude_session_id:
-                results["claude_session_id"] = claude_session_id
-                print(f"[Sandbox:{session_id}] Claude session ID: {claude_session_id}")
-                send_event("session_complete", {"claude_session_id": claude_session_id})
-            else:
-                print(f"[Sandbox:{session_id}] No session_end event found")
-            
             results["status"] = "completed"
-            print(f"[Sandbox:{session_id}] Agent completed successfully")
-            
-            # Verify files and fix permissions
-            verify_workspace_files(session_id, workspace)
-            
-            # Start development server
-            print(f"[Sandbox:{session_id}] Starting dev server after Claude completes...")
-            dev_server = DevServerManager(
-                session_id=session_id,
-                work_dir=workspace,
-                dev_tunnel_url=dev_tunnel_url,
-                ws_tunnel_url=ws_tunnel_url,
-                send_event=send_event
-            )
-            dev_server.process = dev_server.start()
-            
-            if dev_server.process:
-                send_event("dev_server_started", {
-                    "tunnel_url": dev_tunnel_url, 
-                    "websocket_url": ws_tunnel_url
-                })
-                print(f"[Sandbox:{session_id}] Dev server started at {dev_tunnel_url}")
-                dev_server.start_monitor()
-            else:
-                send_event("dev_server_failed", {
-                    "error": "Failed to start server",
-                    "tunnel_url": dev_tunnel_url
-                })
+            print(f"[Sandbox:{session_id}] Agent session ended ({turn_count} turns, {event_count} events)")
             
             # Update session status
             if sessions.contains(session_id):
                 session_data = sessions[session_id]
                 session_data["status"] = "completed"
                 session_data["last_activity"] = datetime.utcnow().isoformat()
-                session_data["dev_url"] = dev_tunnel_url
-                if ws_urls.contains(session_id):
-                    session_data["websocket_url"] = ws_urls[session_id]
                 sessions[session_id] = session_data
                 print(f"[Sandbox:{session_id}] Updated session status to completed")
             
             send_event("agent_complete", {"status": "completed"})
-            
-            # Keep tunnels alive
-            print(f"[Sandbox:{session_id}] Keeping tunnels alive for 720 seconds")
-            start_time = time.time()
-            while True:
-                time.sleep(1)
-                if time.time() - start_time > 720:
-                    print(f"[Sandbox:{session_id}] 720 seconds elapsed, closing tunnels")
-                    break
-            print(f"[Sandbox:{session_id}] Tunnels closed")
+            print(f"[Sandbox:{session_id}] Sandbox shutting down")
             
         except subprocess.TimeoutExpired:
             print(f"[Sandbox:{session_id}] ERROR: Execution timeout")

@@ -91,15 +91,20 @@ class DevServerManager:
                 os.environ['USER'] = 'claudeuser'
                 os.environ['LOGNAME'] = 'claudeuser'
             
-            # Start a simple Python HTTP server
+            # Start npx serve for static file serving
+            # WITHOUT -s flag so /pizza serves pizza.html, not index.html
+            # -l flag sets the port
+            # --no-port-switching prevents port changes if 3000 is busy
+            # Note: If you need SPA mode, add -s flag back
             with open(log_path, "w") as log_file:
                 process = subprocess.Popen(
-                    ["python3", "-m", "http.server", "3000"],
+                    ["npx", "--yes", "serve@latest", "-l", "3000", "--no-port-switching"],
                     cwd=self.work_dir,
                     stdout=log_file,
                     stderr=subprocess.STDOUT,
                     stdin=subprocess.DEVNULL,
-                    preexec_fn=demote
+                    preexec_fn=demote,
+                    env={**os.environ, 'HOME': claude_user.pw_dir}
                 )
             
             print(f"[Sandbox:{self.session_id}] HTTP server process started as claudeuser (PID: {process.pid}), log: {log_path}")
@@ -212,4 +217,5 @@ class DevServerManager:
         thread.start()
         print(f"[Sandbox:{self.session_id}] Dev server monitor started")
         return thread
+
 
