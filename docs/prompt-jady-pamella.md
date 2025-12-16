@@ -50,14 +50,19 @@ Create a multi-page professional portfolio website for Jady Pamella, a Senior Te
      * Email and location info
 
 Design Requirements:
-- Dark theme with deep navy/dark blue background (#0a0a1a or similar)
-- Accent colors: cyan (#00d4ff) and purple (#8b5cf6) gradients
+- Profile image: https://jadypamella.com/images/profile.png
+- Color palette:
+  * Rosa destaque (highlight pink): #DF3D5C - Used for top menu, titles, icons and highlight elements
+  * Preto grafite (graphite black): #232222 - Used for left side menu and dark backgrounds
+  * Branco quase puro (almost pure white): #FBF9F9 - Used for main card backgrounds and content areas
 - Modern glassmorphism cards with blur and subtle borders
 - Font: Inter or similar clean sans-serif
 - Subtle glow effects on buttons and accent elements
 - Smooth hover animations
 - Fully responsive design
-- NO emojis - use Lucide or similar icon library
+- Do not use emojis anywhere, use icons instead
+- The year is 2025
+- Responsive design
 - Footer on all pages with copyright 2025
 - Active nav link highlighting
 ```
@@ -80,8 +85,9 @@ After generation, the Page Selector should show:
 ## Design Reference
 
 The design follows jadypamella.com with:
-- Dark navy background
-- Cyan/purple gradient accents
+- Graphite black (#232222) for dark backgrounds and side menu
+- Pink (#DF3D5C) accents for highlights, titles, and icons
+- Almost pure white (#FBF9F9) for card backgrounds and content areas
 - Glassmorphism card effects
 - Clean typography
 - Professional tech portfolio aesthetic
