@@ -7,7 +7,7 @@ import ChatInput from "../../components/ChatInput";
 import WebsitePreview from "../../components/WebsitePreview";
 import ThinkingIndicator from "../../components/ThinkingIndicator";
 import { Message } from "../../types";
-import { apiClient } from "../../lib/api-client";
+import { apiClient, PageStructure } from "../../lib/api-client";
 import { useAgentSession } from "../../hooks/useAgentSession";
 import { Button } from "../../components/ui/button";
 import { ScrollArea } from "../../components/ui/scroll-area";
@@ -27,7 +27,7 @@ export default function ChatPage() {
   const [agentSessionId, setAgentSessionId] = useState<string | null>(null);
   const [devUrl, setDevUrl] = useState<string | null>(null);
   const [iframeRefreshTrigger, setIframeRefreshTrigger] = useState(0);
-  const [websitePages, setWebsitePages] = useState<{ path: string; title: string; sections: { id: string; text: string; tag?: string }[] }[]>([]);
+  const [websitePages, setWebsitePages] = useState<PageStructure | null>(null);
   const [isSidebarOpen, setIsSidebarOpen] = useState(true);
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
@@ -211,11 +211,10 @@ export default function ChatPage() {
       }
     }
 
-    // Handle website structure update
-    if (latestEvent.event === "website_structure_updated") {
-      console.log('[Chat] Website structure updated:', latestEvent.data);
-      const pages = latestEvent.data?.pages || [];
-      setWebsitePages(pages);
+    // Handle pages discovered
+    if (latestEvent.event === "pages_discovered") {
+      console.log('[Chat] Pages discovered:', latestEvent.data);
+      setWebsitePages(latestEvent.data as PageStructure);
     }
 
     // Handle agent complete

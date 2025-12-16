@@ -34,6 +34,25 @@ export interface AgentEvent {
   data: Record<string, any>;
 }
 
+export interface PageSection {
+  id: string;
+  name: string;
+  element: string;
+}
+
+export interface PageInfo {
+  path: string;
+  title: string;
+  url: string;
+  sections: PageSection[];
+}
+
+export interface PageStructure {
+  pages: PageInfo[];
+  total_pages: number;
+  total_sections: number;
+}
+
 export class APIClient {
   private baseUrl: string;
 

@@ -189,15 +189,15 @@ def verify_workspace_files(session_id: str, workspace: str):
         print(f"[Sandbox:{session_id}] Could not set workspace permissions: {e}")
 
 
-def get_website_structure(session_id: str, workspace: str) -> dict:
+def scan_workspace_pages(session_id: str, workspace: str) -> dict:
     """
-    Scan workspace for HTML files and extract page structure.
+    Scan workspace for HTML files and extract page structure with sections.
     Returns a dict with pages, their titles, and internal sections/anchors.
     """
     import re
     
     pages = []
-    html_files = list(set(glob.glob(f"{workspace}/**/*.html", recursive=True)))
+    html_files = list(set(glob.glob(f"{workspace}/*.html") + glob.glob(f"{workspace}/**/*.html", recursive=True)))
     
     print(f"[Sandbox:{session_id}] Scanning for HTML files in {workspace}...")
     print(f"[Sandbox:{session_id}] Found {len(html_files)} HTML files")
@@ -213,38 +213,53 @@ def get_website_structure(session_id: str, workspace: str) -> dict:
             title = title_match.group(1).strip() if title_match else rel_path
             
             sections = []
-            id_pattern = r'<(section|div|article|header|footer|nav|main|aside|h[1-6])[^>]*\bid=["\']([^"\']+)["\'][^>]*>(.*?)</\1>'
-            id_matches = re.finditer(id_pattern, content, re.IGNORECASE | re.DOTALL)
+            id_pattern = r'<(h[1-6]|section|article|nav|aside|div)[^>]*\sid=["\']([^"\']+)["\'][^>]*>(.*?)</\1>'
             
-            for match in id_matches:
-                tag_name = match.group(1).lower()
-                element_id = match.group(2)
+            for match in re.finditer(id_pattern, content, re.IGNORECASE | re.DOTALL):
+                element_type = match.group(1)
+                section_id = match.group(2)
                 inner_content = match.group(3)
                 
-                heading_match = re.search(r'<h[1-6][^>]*>(.*?)</h[1-6]>', inner_content, re.IGNORECASE | re.DOTALL)
-                if heading_match:
-                    label = re.sub(r'<[^>]+>', '', heading_match.group(1)).strip()
-                else:
-                    label = element_id.replace('-', ' ').replace('_', ' ').title()
+                text_content = re.sub(r'<[^>]+>', '', inner_content).strip()
+                text_content = re.sub(r'\s+', ' ', text_content)
                 
-                if label and len(label) < 100:
-                    sections.append({"id": element_id, "text": label, "tag": tag_name})
+                if len(text_content) > 50:
+                    text_content = text_content[:50] + '...'
+                
+                section_name = text_content if text_content else section_id
+                
+                sections.append({
+                    "id": section_id,
+                    "name": section_name,
+                    "element": element_type
+                })
+                
+                if len(sections) >= 20:
+                    break
             
-            anchor_pattern = r'<a[^>]*\bname=["\']([^"\']+)["\'][^>]*>'
-            for match in re.finditer(anchor_pattern, content, re.IGNORECASE):
-                anchor_name = match.group(1)
-                if not any(s["id"] == anchor_name for s in sections):
-                    sections.append({"id": anchor_name, "text": anchor_name.replace('-', ' ').replace('_', ' ').title(), "tag": "a"})
+            url_path = '/' + rel_path.replace('\\', '/')
+            if url_path == '/index.html':
+                url_path = '/'
             
-            pages.append({"path": rel_path, "title": title, "sections": sections})
-            print(f"[Sandbox:{session_id}]   - {rel_path}: {len(sections)} sections")
+            pages.append({
+                "path": rel_path,
+                "title": title,
+                "url": url_path,
+                "sections": sections
+            })
+            
+            print(f"[Sandbox:{session_id}] Page: {rel_path} - {title} ({len(sections)} sections)")
             
         except Exception as e:
-            print(f"[Sandbox:{session_id}]   - Error parsing {html_file}: {e}")
+            print(f"[Sandbox:{session_id}] Error scanning {html_file}: {type(e).__name__}: {e}")
     
-    pages.sort(key=lambda p: (0 if p["path"] == "index.html" else 1, p["path"]))
+    pages.sort(key=lambda p: (p['path'] != 'index.html', p['path']))
     
-    return {"pages": pages, "total_pages": len(pages), "total_sections": sum(len(p["sections"]) for p in pages)}
+    return {
+        "pages": pages,
+        "total_pages": len(pages),
+        "total_sections": sum(len(p["sections"]) for p in pages)
+    }
 
 
 async def run_claude_agent_multiturn(session_id: str, initial_prompt: str, workspace: str, send_event, prompt_queue: queue.Queue, dev_tunnel_url: str, ws_tunnel_url: str):
@@ -381,8 +396,8 @@ The file must be saved as index.html in the current directory.""" if turn_number
         verify_workspace_files(session_id, workspace)
         
         # Get and send initial website structure
-        structure = get_website_structure(session_id, workspace)
-        send_event("website_structure_updated", structure)
+        structure = scan_workspace_pages(session_id, workspace)
+        send_event("pages_discovered", structure)
         
         # Start development server now that files have been created
         print(f"[Sandbox:{session_id}] Starting dev server at {dev_tunnel_url}...")
@@ -411,8 +426,8 @@ The file must be saved as index.html in the current directory.""" if turn_number
         send_event("ready_for_input", {"turn": turn_count})
         
         # Send updated structure after dev server is ready
-        structure = get_website_structure(session_id, workspace)
-        send_event("website_structure_updated", structure)
+        structure = scan_workspace_pages(session_id, workspace)
+        send_event("pages_discovered", structure)
         
         # Listen for additional prompts
         print(f"[Sandbox:{session_id}] Ready for additional prompts (WebSocket is open for new messages)...")
@@ -431,8 +446,8 @@ The file must be saved as index.html in the current directory.""" if turn_number
                     await process_prompt(new_prompt, turn_count)
                     
                     # Send updated structure after each turn
-                    structure = get_website_structure(session_id, workspace)
-                    send_event("website_structure_updated", structure)
+                    structure = scan_workspace_pages(session_id, workspace)
+                    send_event("pages_discovered", structure)
                     
                     send_event("ready_for_input", {"turn": turn_count})
                     

@@ -5,23 +5,18 @@ import { Card } from "./ui/card";
 import { Button } from "./ui/button";
 import { RefreshCw, ExternalLink } from "lucide-react";
 import PageSelector from "./PageSelector";
-
-interface PageInfo {
-  path: string;
-  title: string;
-  sections: { id: string; text: string; tag?: string }[];
-}
+import { PageStructure } from "../lib/api-client";
 
 interface WebsitePreviewProps {
   devUrl: string;
   refreshTrigger?: number;
-  pages?: PageInfo[];
+  pages?: PageStructure | null;
 }
 
-export default function WebsitePreview({ devUrl, refreshTrigger, pages = [] }: WebsitePreviewProps) {
+export default function WebsitePreview({ devUrl, refreshTrigger, pages }: WebsitePreviewProps) {
   const [isExpanded, setIsExpanded] = useState(true);
   const [refreshKey, setRefreshKey] = useState(0);
-  const [currentPath, setCurrentPath] = useState("index.html");
+  const [currentUrl, setCurrentUrl] = useState(devUrl);
 
   // Refresh when external trigger changes
   useEffect(() => {
@@ -35,13 +30,10 @@ export default function WebsitePreview({ devUrl, refreshTrigger, pages = [] }: W
     setRefreshKey((prev) => prev + 1);
   };
 
-  const handleNavigate = (path: string, hash?: string) => {
-    setCurrentPath(path);
-    setRefreshKey(prev => prev + 1);
+  const handleNavigate = (url: string) => {
+    setCurrentUrl(url);
+    setRefreshKey((prev) => prev + 1);
   };
-
-  // Build the full URL
-  const currentUrl = devUrl.replace(/\/$/, "") + "/" + currentPath;
 
   return (
     <Card className="h-full flex flex-col overflow-hidden">
@@ -73,14 +65,13 @@ export default function WebsitePreview({ devUrl, refreshTrigger, pages = [] }: W
             </div>
           </div>
         </div>
-        {pages.length > 1 && (
+
+        <div className="flex items-center gap-2">
           <PageSelector
-            pages={pages}
-            currentPath={currentPath}
+            pages={pages || null}
+            devUrl={devUrl}
             onNavigate={handleNavigate}
           />
-        )}
-        <div className="flex items-center gap-2">
           <Button
             onClick={handleRefresh}
             variant="ghost"
@@ -117,7 +108,7 @@ export default function WebsitePreview({ devUrl, refreshTrigger, pages = [] }: W
               <div className="h-3 w-3 rounded-full bg-green-500" />
             </div>
             <div className="ml-4 text-xs text-gray-600 font-mono truncate flex-1">
-              {devUrl}
+              {currentUrl}
             </div>
           </div>
 
@@ -136,4 +127,3 @@ export default function WebsitePreview({ devUrl, refreshTrigger, pages = [] }: W
     </Card>
   );
 }
-
