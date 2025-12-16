@@ -46,3 +46,15 @@ After generation, the Page Selector should show:
 | index.html | hero, about, features, cta |
 | blog.html | latest, featured |
 | contact.html | info, faq |
+
+---
+
+## Test Access
+
+**Live Preview URL:** https://ta-01kcma0sqn6awkya4n7np1xzd4-3000.wo-0quvzmo4l1c2p0vnk3uf3gwgb.w.modal.host/
+
+---
+
+## Result Screenshot
+
+![Quantum Programming Website with Page Selector](./quantum-programming-result.png)
