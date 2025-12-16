@@ -52,9 +52,9 @@ Create a multi-page professional portfolio website for Jady Pamella, a Senior Te
 Design Requirements:
 - Profile image: https://jadypamella.com/images/profile.png
 - Color palette:
-  * Rosa destaque (highlight pink): #DF3D5C - Used for top menu, titles, icons and highlight elements
-  * Preto grafite (graphite black): #232222 - Used for left side menu and dark backgrounds
-  * Branco quase puro (almost pure white): #FBF9F9 - Used for main card backgrounds and content areas
+  * Highlight pink: #DF3D5C - Used for top menu, titles, icons and highlight elements
+  * Graphite black: #232222 - Used for left side menu and dark backgrounds
+  * Almost pure white: #FBF9F9 - Used for main card backgrounds and content areas
 - Modern glassmorphism cards with blur and subtle borders
 - Font: Inter or similar clean sans-serif
 - Subtle glow effects on buttons and accent elements

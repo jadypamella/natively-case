@@ -296,8 +296,11 @@ async def run_claude_agent_multiturn(session_id: str, initial_prompt: str, works
             """Process a single prompt and stream responses"""
             nonlocal total_event_count
             
-            # Create a simple prompt for building websites
-            full_prompt = f"""Build a {prompt}.
+            # Create a prompt for building websites
+            if turn_number == 1:
+                full_prompt = f"""First, run: cd {workspace}
+
+Then build a {prompt}.
 
 Create a single index.html file with:
 - Embedded CSS in a <style> tag
@@ -306,7 +309,11 @@ Create a single index.html file with:
 - Responsive layout
 - Clean, professional look
 
-The file must be saved as index.html in the current directory.""" if turn_number == 1 else prompt
+The file must be saved as index.html in the current directory ({workspace})."""
+            else:
+                full_prompt = f"""cd {workspace}
+
+{prompt}"""
             
             print(f"[Sandbox:{session_id}] Turn {turn_number}: Sending prompt to Claude...")
             send_event("turn_start", {"turn": turn_number, "prompt": prompt[:100]})

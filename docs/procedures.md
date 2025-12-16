@@ -1,10 +1,10 @@
 # Page Selector Implementation - Step by Step Guide
 
-This guide shows you how to implement the Page Selector feature yourself, step by step.
+This guide shows what was implemented for the Page Selector feature.
 
 ---
 
-## What You're Building
+## What was implemented
 
 A hierarchical dropdown that shows all HTML pages in the generated website (like `index.html`, `about.html`) with their sections, allowing users to navigate between pages and jump to specific sections.
 
@@ -45,8 +45,8 @@ npm install
 # Install Radix dropdown menu (required for PageSelector)
 npm install @radix-ui/react-dropdown-menu
 
-# Create .env.local file with your Modal backend URL
-# NEXT_PUBLIC_API_URL=https://your-username--website-builder-api-web.modal.run
+# Create .env.local file with the Modal backend URL
+# NEXT_PUBLIC_API_URL=https://my-username--website-builder-api-web.modal.run
 
 # Start development server
 npm run dev

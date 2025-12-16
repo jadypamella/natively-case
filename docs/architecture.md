@@ -60,7 +60,7 @@ Chat interface that:
 - Connects to backend WebSocket
 - Displays AI responses
 - Shows website preview in iframe
-- Handles `website_structure_updated` events for Page Selector
+- Handles `pages_discovered` events for Page Selector
 
 #### `app/components/WebsitePreview.tsx`
 iframe wrapper that displays generated website with:
@@ -97,7 +97,7 @@ FastAPI routes:
 Core agent logic:
 - `run_agent_in_sandbox()` - Main Modal function
 - `run_claude_agent_multiturn()` - Multi-turn conversation handler
-- `get_website_structure()` - Parses HTML files for Page Selector
+- `scan_workspace_pages()` - Parses HTML files for Page Selector
 - WebSocket server for real-time events
 
 #### `dev_server.py`
@@ -121,7 +121,7 @@ Modal app configuration:
 4. **Dev server starts** → `npx serve` hosts files on port 3000
 5. **Modal tunnel created** → Public URL for preview
 6. **WebSocket events sent** → Real-time updates to frontend
-7. **`website_structure_updated`** → Page Selector receives page list
+7. **`pages_discovered`** → Page Selector receives page list
 8. **iframe loads** → User sees live preview
 
 ---
@@ -135,7 +135,7 @@ Modal app configuration:
 | `claude_text` | Streaming text response |
 | `claude_tool_use` | Agent using tool (file write, etc.) |
 | `dev_server_started` | Preview server ready |
-| `website_structure_updated` | Pages/sections for Page Selector |
+| `pages_discovered` | Pages/sections for Page Selector |
 | `ready_for_input` | Agent waiting for next prompt |
 | `agent_complete` | Session finished |
 
