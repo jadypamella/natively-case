@@ -189,6 +189,64 @@ def verify_workspace_files(session_id: str, workspace: str):
         print(f"[Sandbox:{session_id}] Could not set workspace permissions: {e}")
 
 
+def get_website_structure(session_id: str, workspace: str) -> dict:
+    """
+    Scan workspace for HTML files and extract page structure.
+    Returns a dict with pages, their titles, and internal sections/anchors.
+    """
+    import re
+    
+    pages = []
+    html_files = list(set(glob.glob(f"{workspace}/**/*.html", recursive=True)))
+    
+    print(f"[Sandbox:{session_id}] Scanning for HTML files in {workspace}...")
+    print(f"[Sandbox:{session_id}] Found {len(html_files)} HTML files")
+    
+    for html_file in html_files:
+        try:
+            rel_path = os.path.relpath(html_file, workspace)
+            
+            with open(html_file, 'r', encoding='utf-8', errors='ignore') as f:
+                content = f.read()
+            
+            title_match = re.search(r'<title[^>]*>(.*?)</title>', content, re.IGNORECASE | re.DOTALL)
+            title = title_match.group(1).strip() if title_match else rel_path
+            
+            sections = []
+            id_pattern = r'<(section|div|article|header|footer|nav|main|aside|h[1-6])[^>]*\bid=["\']([^"\']+)["\'][^>]*>(.*?)</\1>'
+            id_matches = re.finditer(id_pattern, content, re.IGNORECASE | re.DOTALL)
+            
+            for match in id_matches:
+                tag_name = match.group(1).lower()
+                element_id = match.group(2)
+                inner_content = match.group(3)
+                
+                heading_match = re.search(r'<h[1-6][^>]*>(.*?)</h[1-6]>', inner_content, re.IGNORECASE | re.DOTALL)
+                if heading_match:
+                    label = re.sub(r'<[^>]+>', '', heading_match.group(1)).strip()
+                else:
+                    label = element_id.replace('-', ' ').replace('_', ' ').title()
+                
+                if label and len(label) < 100:
+                    sections.append({"id": element_id, "text": label, "tag": tag_name})
+            
+            anchor_pattern = r'<a[^>]*\bname=["\']([^"\']+)["\'][^>]*>'
+            for match in re.finditer(anchor_pattern, content, re.IGNORECASE):
+                anchor_name = match.group(1)
+                if not any(s["id"] == anchor_name for s in sections):
+                    sections.append({"id": anchor_name, "text": anchor_name.replace('-', ' ').replace('_', ' ').title(), "tag": "a"})
+            
+            pages.append({"path": rel_path, "title": title, "sections": sections})
+            print(f"[Sandbox:{session_id}]   - {rel_path}: {len(sections)} sections")
+            
+        except Exception as e:
+            print(f"[Sandbox:{session_id}]   - Error parsing {html_file}: {e}")
+    
+    pages.sort(key=lambda p: (0 if p["path"] == "index.html" else 1, p["path"]))
+    
+    return {"pages": pages, "total_pages": len(pages), "total_sections": sum(len(p["sections"]) for p in pages)}
+
+
 async def run_claude_agent_multiturn(session_id: str, initial_prompt: str, workspace: str, send_event, prompt_queue: queue.Queue, dev_tunnel_url: str, ws_tunnel_url: str):
     """Run the Claude Agent SDK with support for multiple prompts"""
     from claude_agent_sdk import (
@@ -322,6 +380,10 @@ The file must be saved as index.html in the current directory.""" if turn_number
         # Verify files and fix permissions
         verify_workspace_files(session_id, workspace)
         
+        # Get and send initial website structure
+        structure = get_website_structure(session_id, workspace)
+        send_event("website_structure_updated", structure)
+        
         # Start development server now that files have been created
         print(f"[Sandbox:{session_id}] Starting dev server at {dev_tunnel_url}...")
         send_event("dev_server_starting", {})
@@ -348,6 +410,10 @@ The file must be saved as index.html in the current directory.""" if turn_number
         
         send_event("ready_for_input", {"turn": turn_count})
         
+        # Send updated structure after dev server is ready
+        structure = get_website_structure(session_id, workspace)
+        send_event("website_structure_updated", structure)
+        
         # Listen for additional prompts
         print(f"[Sandbox:{session_id}] Ready for additional prompts (WebSocket is open for new messages)...")
         while True:
@@ -363,6 +429,11 @@ The file must be saved as index.html in the current directory.""" if turn_number
                     turn_count += 1
                     print(f"[Sandbox:{session_id}] Processing turn {turn_count}")
                     await process_prompt(new_prompt, turn_count)
+                    
+                    # Send updated structure after each turn
+                    structure = get_website_structure(session_id, workspace)
+                    send_event("website_structure_updated", structure)
+                    
                     send_event("ready_for_input", {"turn": turn_count})
                     
             except asyncio.CancelledError:
