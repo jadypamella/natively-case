@@ -20,17 +20,18 @@ export default function ChatPage() {
   const router = useRouter();
   const params = useParams();
   const chatId = params.id as string;
-  
+
   const [messages, setMessages] = useState<Message[]>([]);
   const [isLoading, setIsLoading] = useState(false);
   const [isThinking, setIsThinking] = useState(false);
   const [agentSessionId, setAgentSessionId] = useState<string | null>(null);
   const [devUrl, setDevUrl] = useState<string | null>(null);
   const [iframeRefreshTrigger, setIframeRefreshTrigger] = useState(0);
+  const [websitePages, setWebsitePages] = useState<{ path: string; title: string; sections: { id: string; text: string; tag?: string }[] }[]>([]);
   const [isSidebarOpen, setIsSidebarOpen] = useState(true);
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
-  
+
   // Connect to agent session WebSocket
   const agentSession = useAgentSession(agentSessionId);
 
@@ -48,7 +49,7 @@ export default function ChatPage() {
 
     const latestEvent = agentSession.events[agentSession.events.length - 1];
     console.log('[Chat] Processing event:', latestEvent.event, latestEvent.data);
-    
+
     // Handle Claude text events
     if (latestEvent.event === "claude_text") {
       const text = latestEvent.data?.text;
@@ -58,7 +59,7 @@ export default function ChatPage() {
         setMessages((prev) => {
           const streamingMsgId = "streaming-response";
           const existingIndex = prev.findIndex((m) => m.id === streamingMsgId);
-          
+
           if (existingIndex >= 0) {
             const updated = [...prev];
             updated[existingIndex] = {
@@ -68,8 +69,8 @@ export default function ChatPage() {
             return updated;
           } else {
             // Remove placeholder "Building..." messages when real content arrives
-            const filtered = prev.filter(m => 
-              !m.content.includes("Building your website") && 
+            const filtered = prev.filter(m =>
+              !m.content.includes("Building your website") &&
               !m.content.includes("Processing your request")
             );
             return [
@@ -87,26 +88,26 @@ export default function ChatPage() {
         setIsThinking(true);
       }
     }
-    
+
     // Handle Claude thinking events
     if (latestEvent.event === "claude_thinking") {
       console.log('[Chat] Claude is thinking');
       setIsThinking(true);
     }
-    
+
     // Handle Claude tool use events
     if (latestEvent.event === "claude_tool_use") {
       console.log('[Chat] Claude is using a tool:', latestEvent.data?.tool);
       setIsThinking(true);
     }
-    
+
     // Handle Claude events (contains text in nested structure)
     if (latestEvent.event === "claude_event") {
       const eventType = latestEvent.data?.event_type;
       const data = latestEvent.data?.data;
-      
+
       console.log('[Chat] Claude event type:', eventType);
-      
+
       // Extract text from message content
       if (data?.message?.content && Array.isArray(data.message.content)) {
         for (const item of data.message.content) {
@@ -115,7 +116,7 @@ export default function ChatPage() {
             setMessages((prev) => {
               const streamingMsgId = "streaming-response";
               const existingIndex = prev.findIndex((m) => m.id === streamingMsgId);
-              
+
               if (existingIndex >= 0) {
                 const updated = [...prev];
                 updated[existingIndex] = {
@@ -125,8 +126,8 @@ export default function ChatPage() {
                 return updated;
               } else {
                 // Remove placeholder messages when real content arrives
-                const filtered = prev.filter(m => 
-                  !m.content.includes("Building your website") && 
+                const filtered = prev.filter(m =>
+                  !m.content.includes("Building your website") &&
                   !m.content.includes("Processing your request")
                 );
                 return [
@@ -144,42 +145,42 @@ export default function ChatPage() {
         }
       }
     }
-    
+
     // Handle dev server started
     if (latestEvent.event === "dev_server_started") {
       const url = latestEvent.data?.tunnel_url;
       if (url && !devUrl) {
         console.log('[Chat] Dev server started:', url);
         setDevUrl(url);
-        
+
         const msg: Message = {
           id: `website-ready-${Date.now()}`,
           role: "assistant",
           content: "✨ Your website is ready! Check it out in the preview panel on the right.",
           timestamp: new Date(),
         };
-        
+
         setMessages((prev) => {
           const exists = prev.some((m) => m.content.includes("website is ready"));
           return exists ? prev : [...prev, msg];
         });
-        
+
         // Initial load of iframe
         console.log('[Chat] Initial iframe load');
         setIframeRefreshTrigger(prev => prev + 1);
       }
     }
-    
+
     // Handle turn complete - finalize streaming message for this turn
     if (latestEvent.event === "turn_complete") {
       console.log('[Chat] Turn completed');
       setIsThinking(false);
-      
+
       // Finalize streaming message for this turn
       setMessages((prev) => {
         const hasStreaming = prev.some(m => m.id === "streaming-response");
         if (!hasStreaming) return prev;
-        
+
         return prev.map((msg) => {
           if (msg.id === "streaming-response") {
             return {
@@ -190,30 +191,37 @@ export default function ChatPage() {
           return msg;
         });
       });
-      
+
       // Refresh iframe to show updated website
       if (devUrl) {
         console.log('[Chat] Refreshing iframe after turn complete');
         setIframeRefreshTrigger(prev => prev + 1);
       }
     }
-    
+
     // Handle ready for input
     if (latestEvent.event === "ready_for_input") {
       console.log('[Chat] Ready for input');
       setIsThinking(false);
-      
+
       // Also refresh iframe when ready for input
       if (devUrl) {
         console.log('[Chat] Refreshing iframe - ready for input');
         setIframeRefreshTrigger(prev => prev + 1);
       }
     }
-    
+
+    // Handle website structure update
+    if (latestEvent.event === "website_structure_updated") {
+      console.log('[Chat] Website structure updated:', latestEvent.data);
+      const pages = latestEvent.data?.pages || [];
+      setWebsitePages(pages);
+    }
+
     // Handle agent complete
     if (latestEvent.event === "agent_complete") {
       console.log('[Chat] Agent completed');
-      
+
       // Finalize streaming message
       setMessages((prev) => {
         return prev.map((msg) => {
@@ -226,11 +234,11 @@ export default function ChatPage() {
           return msg;
         });
       });
-      
+
       setIsLoading(false);
       setIsThinking(false);
     }
-    
+
     // Handle errors
     if (latestEvent.event === "agent_error") {
       console.log('[Chat] Agent error:', latestEvent.data?.error);
@@ -274,7 +282,7 @@ export default function ChatPage() {
       if (agentSessionId && agentSession.isConnected && agentSession.sendPrompt) {
         console.log('[Chat] Sending follow-up prompt via WebSocket');
         const success = agentSession.sendPrompt(content.trim());
-        
+
         if (!success) {
           throw new Error('Failed to send prompt via WebSocket');
         }
@@ -301,17 +309,17 @@ export default function ChatPage() {
 
         setMessages((prev) => [...prev, assistantMessage]);
       }
-      
+
     } catch (error) {
       console.error("Failed to send message:", error);
-      
+
       const errorMessage: Message = {
         id: (Date.now() + 1).toString(),
         role: "assistant",
         content: `Error: ${error instanceof Error ? error.message : "Failed to send message"}`,
         timestamp: new Date(),
       };
-      
+
       setMessages((prev) => [...prev, errorMessage]);
       setIsThinking(false);
     } finally {
@@ -348,117 +356,117 @@ export default function ChatPage() {
 
         {/* Main Content Area - Split Panel when dev server is available */}
         <div className="flex flex-1 overflow-hidden">
-        {/* Desktop Sidebar Toggle */}
-        {!isSidebarOpen && (
-          <div className="hidden lg:flex items-center border-r">
-            <Button 
-              variant="ghost" 
-              size="icon"
-              onClick={() => setIsSidebarOpen(true)}
-              className="m-2"
-            >
-              <PanelLeft className="h-4 w-4" />
-            </Button>
-          </div>
-        )}
-        {/* Left Panel - Chat */}
-        <div className={`flex flex-col ${devUrl ? 'w-1/2 border-r' : 'w-full'} transition-all`}>
-          {/* Messages Area */}
-          <ScrollArea className="flex-1">
-            <div className="max-w-3xl mx-auto px-4 py-6">
-              {messages.length === 0 && (
-                <div className="flex h-full items-center justify-center py-12">
-                  <div className="w-full max-w-2xl space-y-8">
-                    <div className="text-center space-y-4">
-                      <div className="inline-flex items-center gap-2 px-4 py-2 rounded-full bg-gradient-to-r from-blue-500/10 to-cyan-500/10 border border-blue-500/20 text-blue-600 dark:text-blue-400 text-sm font-medium mb-2">
-                        <Sparkles className="h-4 w-4" />
-                        <span>AI-Powered Website Builder</span>
-                      </div>
-                      <h1 className="text-4xl font-bold tracking-tight bg-gradient-to-r from-blue-600 to-cyan-600 dark:from-blue-400 dark:to-cyan-400 bg-clip-text text-transparent">
-                        Build beautiful websites
-                      </h1>
-                      <p className="text-lg text-muted-foreground">
-                        Describe your vision, watch it come to life
-                      </p>
-                    </div>
-
-                    <div className="space-y-4">
-                      <p className="text-sm text-muted-foreground text-center font-medium">Try an example</p>
-                      <div className="flex flex-wrap gap-3 justify-center">
-                        {[
-                          "Portfolio website with dark mode",
-                          "Landing page for a SaaS product",
-                          "Blog with article cards",
-                          "Restaurant menu website",
-                        ].map((example, idx) => (
-                          <Button
-                            key={idx}
-                            variant="outline"
-                            size="default"
-                            onClick={() => handleSendMessage(example)}
-                            className="text-sm font-medium hover:bg-gradient-to-r hover:from-blue-500/10 hover:to-cyan-500/10 hover:border-blue-500/30 transition-all"
-                          >
-                            {example}
-                          </Button>
-                        ))}
-                      </div>
-                    </div>
-                  </div>
-                </div>
-              )}
-              {messages.map((message) => (
-                <ChatMessage 
-                  key={message.id} 
-                  message={message}
-                  isStreaming={message.id === "streaming-response"}
-                />
-              ))}
-              {isThinking && (
-                <ThinkingIndicator />
-              )}
-              {isLoading && messages[messages.length - 1]?.role !== "assistant" && !isThinking && (
-                <div className="mb-8 flex items-start gap-4 animate-in fade-in slide-in-from-bottom-4 duration-500">
-                  <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-gradient-to-br from-blue-500 to-cyan-500 text-white shadow-md">
-                    <Sparkles className="h-4 w-4" />
-                  </div>
-                  <div className="flex-1 space-y-2">
-                    <div className="text-xs font-semibold text-muted-foreground">
-                      AI Assistant
-                    </div>
-                    <div className="flex gap-1.5 pt-1">
-                      <div className="h-2 w-2 animate-bounce rounded-full bg-blue-500 [animation-delay:-0.3s]"></div>
-                      <div className="h-2 w-2 animate-bounce rounded-full bg-blue-500 [animation-delay:-0.15s]"></div>
-                      <div className="h-2 w-2 animate-bounce rounded-full bg-blue-500"></div>
-                    </div>
-                  </div>
-                </div>
-              )}
-              <div ref={messagesEndRef} />
-            </div>
-          </ScrollArea>
-
-          {agentSessionId && (
-            <div className="absolute bottom-24 left-4 z-10 flex flex-col gap-2">
-              {isLoading && (
-                <Badge variant="outline" className="gap-2 bg-blue-500/10 border-blue-500/30 text-blue-600 dark:text-blue-400">
-                  <div className="h-2 w-2 rounded-full bg-blue-500 animate-pulse" />
-                  <span className="text-xs font-medium">Building...</span>
-                </Badge>
-              )}
-              <Badge variant="outline" className="gap-2">
-                <div className={`h-2 w-2 rounded-full ${agentSession.isConnected ? 'bg-green-500' : 'bg-gray-400'}`} />
-                <span className="text-xs">{agentSession.isConnected ? 'Connected' : 'Connecting...'}</span>
-              </Badge>
+          {/* Desktop Sidebar Toggle */}
+          {!isSidebarOpen && (
+            <div className="hidden lg:flex items-center border-r">
+              <Button
+                variant="ghost"
+                size="icon"
+                onClick={() => setIsSidebarOpen(true)}
+                className="m-2"
+              >
+                <PanelLeft className="h-4 w-4" />
+              </Button>
             </div>
           )}
+          {/* Left Panel - Chat */}
+          <div className={`flex flex-col ${devUrl ? 'w-1/2 border-r' : 'w-full'} transition-all`}>
+            {/* Messages Area */}
+            <ScrollArea className="flex-1">
+              <div className="max-w-3xl mx-auto px-4 py-6">
+                {messages.length === 0 && (
+                  <div className="flex h-full items-center justify-center py-12">
+                    <div className="w-full max-w-2xl space-y-8">
+                      <div className="text-center space-y-4">
+                        <div className="inline-flex items-center gap-2 px-4 py-2 rounded-full bg-gradient-to-r from-blue-500/10 to-cyan-500/10 border border-blue-500/20 text-blue-600 dark:text-blue-400 text-sm font-medium mb-2">
+                          <Sparkles className="h-4 w-4" />
+                          <span>AI-Powered Website Builder</span>
+                        </div>
+                        <h1 className="text-4xl font-bold tracking-tight bg-gradient-to-r from-blue-600 to-cyan-600 dark:from-blue-400 dark:to-cyan-400 bg-clip-text text-transparent">
+                          Build beautiful websites
+                        </h1>
+                        <p className="text-lg text-muted-foreground">
+                          Describe your vision, watch it come to life
+                        </p>
+                      </div>
 
-          <ChatInput onSendMessage={handleSendMessage} isLoading={isLoading} />
-        </div>
+                      <div className="space-y-4">
+                        <p className="text-sm text-muted-foreground text-center font-medium">Try an example</p>
+                        <div className="flex flex-wrap gap-3 justify-center">
+                          {[
+                            "Portfolio website with dark mode",
+                            "Landing page for a SaaS product",
+                            "Blog with article cards",
+                            "Restaurant menu website",
+                          ].map((example, idx) => (
+                            <Button
+                              key={idx}
+                              variant="outline"
+                              size="default"
+                              onClick={() => handleSendMessage(example)}
+                              className="text-sm font-medium hover:bg-gradient-to-r hover:from-blue-500/10 hover:to-cyan-500/10 hover:border-blue-500/30 transition-all"
+                            >
+                              {example}
+                            </Button>
+                          ))}
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                )}
+                {messages.map((message) => (
+                  <ChatMessage
+                    key={message.id}
+                    message={message}
+                    isStreaming={message.id === "streaming-response"}
+                  />
+                ))}
+                {isThinking && (
+                  <ThinkingIndicator />
+                )}
+                {isLoading && messages[messages.length - 1]?.role !== "assistant" && !isThinking && (
+                  <div className="mb-8 flex items-start gap-4 animate-in fade-in slide-in-from-bottom-4 duration-500">
+                    <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-gradient-to-br from-blue-500 to-cyan-500 text-white shadow-md">
+                      <Sparkles className="h-4 w-4" />
+                    </div>
+                    <div className="flex-1 space-y-2">
+                      <div className="text-xs font-semibold text-muted-foreground">
+                        AI Assistant
+                      </div>
+                      <div className="flex gap-1.5 pt-1">
+                        <div className="h-2 w-2 animate-bounce rounded-full bg-blue-500 [animation-delay:-0.3s]"></div>
+                        <div className="h-2 w-2 animate-bounce rounded-full bg-blue-500 [animation-delay:-0.15s]"></div>
+                        <div className="h-2 w-2 animate-bounce rounded-full bg-blue-500"></div>
+                      </div>
+                    </div>
+                  </div>
+                )}
+                <div ref={messagesEndRef} />
+              </div>
+            </ScrollArea>
+
+            {agentSessionId && (
+              <div className="absolute bottom-24 left-4 z-10 flex flex-col gap-2">
+                {isLoading && (
+                  <Badge variant="outline" className="gap-2 bg-blue-500/10 border-blue-500/30 text-blue-600 dark:text-blue-400">
+                    <div className="h-2 w-2 rounded-full bg-blue-500 animate-pulse" />
+                    <span className="text-xs font-medium">Building...</span>
+                  </Badge>
+                )}
+                <Badge variant="outline" className="gap-2">
+                  <div className={`h-2 w-2 rounded-full ${agentSession.isConnected ? 'bg-green-500' : 'bg-gray-400'}`} />
+                  <span className="text-xs">{agentSession.isConnected ? 'Connected' : 'Connecting...'}</span>
+                </Badge>
+              </div>
+            )}
+
+            <ChatInput onSendMessage={handleSendMessage} isLoading={isLoading} />
+          </div>
 
           {/* Right Panel - Website Preview */}
           {devUrl && (
             <div className="w-1/2 flex flex-col">
-              <WebsitePreview devUrl={devUrl} refreshTrigger={iframeRefreshTrigger} />
+              <WebsitePreview devUrl={devUrl} refreshTrigger={iframeRefreshTrigger} pages={websitePages} />
             </div>
           )}
         </div>
