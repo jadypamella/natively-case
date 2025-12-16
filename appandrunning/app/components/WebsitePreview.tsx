@@ -4,15 +4,24 @@ import { useState, useEffect } from "react";
 import { Card } from "./ui/card";
 import { Button } from "./ui/button";
 import { RefreshCw, ExternalLink } from "lucide-react";
+import PageSelector from "./PageSelector";
+
+interface PageInfo {
+  path: string;
+  title: string;
+  sections: { id: string; text: string; tag?: string }[];
+}
 
 interface WebsitePreviewProps {
   devUrl: string;
-  refreshTrigger?: number; // External trigger to refresh iframe
+  refreshTrigger?: number;
+  pages?: PageInfo[];
 }
 
-export default function WebsitePreview({ devUrl, refreshTrigger }: WebsitePreviewProps) {
+export default function WebsitePreview({ devUrl, refreshTrigger, pages = [] }: WebsitePreviewProps) {
   const [isExpanded, setIsExpanded] = useState(true);
   const [refreshKey, setRefreshKey] = useState(0);
+  const [currentPath, setCurrentPath] = useState("index.html");
 
   // Refresh when external trigger changes
   useEffect(() => {
@@ -25,6 +34,14 @@ export default function WebsitePreview({ devUrl, refreshTrigger }: WebsitePrevie
   const handleRefresh = () => {
     setRefreshKey((prev) => prev + 1);
   };
+
+  const handleNavigate = (path: string, hash?: string) => {
+    setCurrentPath(path);
+    setRefreshKey(prev => prev + 1);
+  };
+
+  // Build the full URL
+  const currentUrl = devUrl.replace(/\/$/, "") + "/" + currentPath;
 
   return (
     <Card className="h-full flex flex-col overflow-hidden">
@@ -56,7 +73,13 @@ export default function WebsitePreview({ devUrl, refreshTrigger }: WebsitePrevie
             </div>
           </div>
         </div>
-
+        {pages.length > 1 && (
+          <PageSelector
+            pages={pages}
+            currentPath={currentPath}
+            onNavigate={handleNavigate}
+          />
+        )}
         <div className="flex items-center gap-2">
           <Button
             onClick={handleRefresh}
@@ -102,7 +125,7 @@ export default function WebsitePreview({ devUrl, refreshTrigger }: WebsitePrevie
           <div className="flex-1 relative bg-white">
             <iframe
               key={refreshKey}
-              src={devUrl}
+              src={currentUrl}
               className="absolute inset-0 w-full h-full border-0"
               title="Website Preview"
               sandbox="allow-same-origin allow-scripts allow-forms allow-popups allow-modals"
